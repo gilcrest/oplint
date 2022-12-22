@@ -1,14 +1,16 @@
-// Package oplint defines an Analyzer that reports errs.Op const declarations
+// Package oplint defines an Analyzer that reports Op const declarations
+// When creating errors or logs, it is common to use an "op" constant to
+// capture what function is making the call, to allow for debugging where
+// a certain error took place.
 package oplint
 
 import (
-	"bytes"
 	"fmt"
 	"go/ast"
-	"go/printer"
 	"go/token"
-	"golang.org/x/tools/go/analysis"
 	"strings"
+
+	"golang.org/x/tools/go/analysis"
 )
 
 var Analyzer = &analysis.Analyzer{
@@ -17,29 +19,20 @@ var Analyzer = &analysis.Analyzer{
 	Run:  run,
 }
 
-// render returns the pretty-print of the given node
-func render(fset *token.FileSet, x interface{}) string {
-	var buf bytes.Buffer
-	if err := printer.Fprint(&buf, fset, x); err != nil {
-		panic(err)
-	}
-	return buf.String()
-}
 func run(pass *analysis.Pass) (interface{}, error) {
-
 	for _, file := range pass.Files {
-		allFuncs := collectFuncDeclarations(pass, file)
+		//ast.Print(pass.Fset, file)
+		allFuncs := collectFuncDeclarations(file)
 		for _, f := range allFuncs {
 			fo := newFuncOp(f)
-			fo.Report(pass)
+			fo.warn(pass)
 		}
 	}
 	return nil, nil
 }
 
 // retrieve list of all function declarations
-func collectFuncDeclarations(pass *analysis.Pass, node ast.Node) []*ast.FuncDecl {
-
+func collectFuncDeclarations(node ast.Node) []*ast.FuncDecl {
 	// walk through file and pull out func identifier nodes
 	var funcDecls []*ast.FuncDecl
 	ast.Inspect(node, func(n ast.Node) bool {
@@ -54,6 +47,10 @@ func collectFuncDeclarations(pass *analysis.Pass, node ast.Node) []*ast.FuncDecl
 }
 
 type funcOp struct {
+	// Function Receiver Name
+	FuncReceiverIdentifier string
+	// Function Receiver Name
+	FuncReceiverStructName string
 	// Function name
 	FuncName string
 	// Op constant name (either op or Op)
@@ -66,23 +63,50 @@ type funcOp struct {
 	OpValuePos token.Pos
 }
 
-func (fo *funcOp) Report(pass *analysis.Pass) {
-	if fo.OpValue != fo.FuncName {
-		fmt.Printf("op constant value (%s) at %s does not match the function name (%s)\n", fo.OpValue, pass.Fset.Position(fo.OpNamePos), fo.FuncName)
+func (fo *funcOp) warn(pass *analysis.Pass) {
+
+	// only issue warnings for functions that have an op constant defined
+	// if no op value, skip
+	if fo.OpValue == "" {
+		return
+	}
+	var name string
+	name = pass.Pkg.Name() + "/" + fo.FuncName
+	if fo.FuncReceiverStructName != "" {
+		name = pass.Pkg.Name() + "/" + fo.FuncReceiverStructName + "." + fo.FuncName
 	}
 
+	if fo.OpValue != name {
+		//fmt.Printf("op constant value (%s) at %s does not match the function name (%s)\n", fo.OpValue, pass.Fset.Position(fo.OpNamePos), fo.FuncName)
+		fmt.Printf("%s: %s constant value (%s) does not match, see %s\n", name, fo.OpName, fo.OpValue, pass.Fset.Position(fo.OpNamePos))
+	}
 }
 
 func newFuncOp(fd *ast.FuncDecl) funcOp {
-
 	var fo funcOp
+
+	// get function receiver name (if present)
+	if fd.Recv != nil {
+		field := fd.Recv.List[0]
+		fieldName := field.Names[0]
+		fo.FuncReceiverIdentifier = fieldName.Name
+		switch t := field.Type.(type) {
+		case *ast.Ident: // value receiver
+			fo.FuncReceiverStructName = t.Name
+		case *ast.StarExpr: // pointer receiver
+			switch starx := t.X.(type) {
+			case *ast.Ident:
+				fo.FuncReceiverStructName = starx.Name
+			}
+		}
+	}
 
 	// get function name
 	fo.FuncName = fd.Name.String()
 
 	// loop through list of statements in the function body and
-	// determine if any are constant declarations. If so and they
-	// have the name op or Op, add to the function and return
+	// determine if any are constant declarations. If yes, and they
+	// have the name op or Op, add to the struct and return
 	for _, stmt := range fd.Body.List {
 		switch x := stmt.(type) {
 		case *ast.DeclStmt:
@@ -111,37 +135,4 @@ func newFuncOp(fd *ast.FuncDecl) funcOp {
 	}
 
 	return fo
-}
-
-func nodePrinter(pass *analysis.Pass, node ast.Node) {
-	ast.Inspect(node, func(n ast.Node) bool {
-
-		// print type for each ast.Node
-		if n != nil {
-			fmt.Printf("%T\n", n)
-		}
-
-		var (
-			s    string
-			kind string
-		)
-		switch x := n.(type) {
-		// A BasicLit node represents a literal of basic type.
-		case *ast.BasicLit:
-			s = x.Value
-			kind = "BasicLit"
-		// Identifiers
-		case *ast.Ident:
-			s = x.Name
-			if x.Obj != nil {
-				kind = x.Obj.Kind.String()
-			}
-		}
-		if s != "" {
-			//fmt.Printf("%s:\t%s\n", pass.Fset.Position(n.Pos()), s)
-			fmt.Printf("%s[%s]:\t%s\n", pass.Fset.Position(n.Pos()), kind, s)
-		}
-
-		return true
-	})
 }
