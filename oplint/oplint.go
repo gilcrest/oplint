@@ -5,7 +5,6 @@
 package oplint
 
 import (
-	"fmt"
 	"go/ast"
 	"go/token"
 	"strings"
@@ -15,7 +14,7 @@ import (
 
 var Analyzer = &analysis.Analyzer{
 	Name: "oplint",
-	Doc:  "reports errs.Op const declarations",
+	Doc:  "reports inconsistent op const declarations",
 	Run:  run,
 }
 
@@ -25,9 +24,10 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		allFuncs := collectFuncDeclarations(file)
 		for _, f := range allFuncs {
 			fo := newFuncOp(f)
-			fo.warn(pass)
+			fo.report(pass)
 		}
 	}
+
 	return nil, nil
 }
 
@@ -63,7 +63,7 @@ type funcOp struct {
 	OpValuePos token.Pos
 }
 
-func (fo *funcOp) warn(pass *analysis.Pass) {
+func (fo *funcOp) report(pass *analysis.Pass) {
 
 	// only issue warnings for functions that have an op constant defined
 	// if no op value, skip
@@ -77,8 +77,7 @@ func (fo *funcOp) warn(pass *analysis.Pass) {
 	}
 
 	if fo.OpValue != name {
-		//fmt.Printf("op constant value (%s) at %s does not match the function name (%s)\n", fo.OpValue, pass.Fset.Position(fo.OpNamePos), fo.FuncName)
-		fmt.Printf("%s: %s constant value (%s) does not match, see %s\n", name, fo.OpName, fo.OpValue, pass.Fset.Position(fo.OpNamePos))
+		pass.Reportf(fo.OpNamePos, "%s constant value (%s) does not match function name (%s)", fo.OpName, fo.OpValue, name)
 	}
 }
 
