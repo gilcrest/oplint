@@ -5,6 +5,7 @@
 package oplint
 
 import (
+	"flag"
 	"go/ast"
 	"go/token"
 	"strings"
@@ -12,10 +13,18 @@ import (
 	"golang.org/x/tools/go/analysis"
 )
 
+func newFlagSet() flag.FlagSet {
+	fs := flag.NewFlagSet("oplint flags", flag.ContinueOnError)
+	fs.Bool("missing", false, "provide diagnostics for functions which have an error return, but no op constant defined")
+
+	return *fs
+}
+
 var Analyzer = &analysis.Analyzer{
-	Name: "oplint",
-	Doc:  "reports inconsistent op const declarations",
-	Run:  run,
+	Name:  "oplint",
+	Doc:   "reports inconsistent op const declarations",
+	Run:   run,
+	Flags: newFlagSet(),
 }
 
 func run(pass *analysis.Pass) (interface{}, error) {
@@ -24,7 +33,17 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		allFuncs := collectFuncDeclarations(file)
 		for _, f := range allFuncs {
 			fo := newFuncOp(f)
-			fo.report(pass)
+			fo.reportConstantMismatch(pass)
+
+			// retrieve *flag.Flag from Analyzer flag.Flagset
+			mf := pass.Analyzer.Flags.Lookup("missing")
+			if mf != nil {
+				// perform type assertion to retrieve boolean value
+				m := mf.Value.(flag.Getter).Get().(bool)
+				if m {
+					fo.reportMissingConstant(pass)
+				}
+			}
 		}
 	}
 
@@ -47,6 +66,10 @@ func collectFuncDeclarations(node ast.Node) []*ast.FuncDecl {
 }
 
 type funcOp struct {
+	// Function Declaration
+	FuncDecl *ast.FuncDecl
+	// HasErrorResult reports whether function returns an error
+	HasErrorResult bool
 	// Function Receiver Name
 	FuncReceiverIdentifier string
 	// Function Receiver Name
@@ -63,7 +86,7 @@ type funcOp struct {
 	OpValuePos token.Pos
 }
 
-func (fo *funcOp) report(pass *analysis.Pass) {
+func (fo *funcOp) reportConstantMismatch(pass *analysis.Pass) {
 
 	// only issue warnings for functions that have an op constant defined
 	// if no op value, skip
@@ -76,13 +99,33 @@ func (fo *funcOp) report(pass *analysis.Pass) {
 		name = pass.Pkg.Name() + "/" + fo.FuncReceiverStructName + "." + fo.FuncName
 	}
 
+	// report op or Op constants defined for functions,
+	// but the value does not match the function name
 	if fo.OpValue != name {
 		pass.Reportf(fo.OpNamePos, "%s constant value (%s) does not match function name (%s)", fo.OpName, fo.OpValue, name)
 	}
 }
 
-func newFuncOp(fd *ast.FuncDecl) funcOp {
-	var fo funcOp
+func (fo *funcOp) reportMissingConstant(pass *analysis.Pass) {
+
+	// only issue warnings for functions that have no op constant defined
+	// if it has op value, skip
+	if fo.OpValue != "" {
+		return
+	}
+	var name string
+	name = pass.Pkg.Name() + "/" + fo.FuncName
+	if fo.FuncReceiverStructName != "" {
+		name = pass.Pkg.Name() + "/" + fo.FuncReceiverStructName + "." + fo.FuncName
+	}
+
+	if fo.HasErrorResult && fo.OpValue == "" {
+		pass.Reportf(fo.FuncDecl.Pos(), "%s returns an error but does not define an op constant", name)
+	}
+}
+
+func newFuncOp(fd *ast.FuncDecl) *funcOp {
+	fo := &funcOp{FuncDecl: fd}
 
 	// get function receiver name (if present)
 	if fd.Recv != nil {
@@ -103,6 +146,18 @@ func newFuncOp(fd *ast.FuncDecl) funcOp {
 	// get function name
 	fo.FuncName = fd.Name.String()
 
+	// determine if function returns an error result
+	if fd.Type.Results.NumFields() > 0 {
+		for _, rf := range fd.Type.Results.List {
+			switch t := rf.Type.(type) {
+			case *ast.Ident:
+				if t.Name == "error" {
+					fo.HasErrorResult = true
+				}
+			}
+		}
+	}
+
 	// loop through list of statements in the function body and
 	// determine if any are constant declarations. If yes, and they
 	// have the name op or Op, add to the struct and return
@@ -115,16 +170,21 @@ func newFuncOp(fd *ast.FuncDecl) funcOp {
 					for _, spec := range y.Specs {
 						switch z := spec.(type) {
 						case *ast.ValueSpec:
+							// if constant is named op or Op,
+							// add name and position to struct
 							name := z.Names[0]
 							if name.Name == "op" || name.Name == "Op" {
 								fo.OpName = name.Name
 								fo.OpNamePos = name.NamePos
 							}
-							value := z.Values[0]
-							switch lit := value.(type) {
-							case *ast.BasicLit:
-								fo.OpValue = strings.Trim(lit.Value, "\"")
-								fo.OpValuePos = lit.ValuePos
+							if fo.OpName != "" {
+								value := z.Values[0]
+								switch lit := value.(type) {
+								case *ast.BasicLit:
+									// add constant op (or Op) value and position to struct
+									fo.OpValue = strings.Trim(lit.Value, "\"")
+									fo.OpValuePos = lit.ValuePos
+								}
 							}
 						}
 					}

@@ -9,6 +9,11 @@ import (
 	"github.com/gilcrest/oplint/oplint"
 )
 
+func init() {
+	// the missing flag sets
+	oplint.Analyzer.Flags.Set("missing", "true")
+}
+
 // This is the directory where our test fixtures are.
 const fixtureDirName = "testdata"
 

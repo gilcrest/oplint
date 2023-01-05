@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-func hello() error {
+func hello() error { // want `testdata/hello returns an error but does not define an op constant`
 	return errors.New("some error message")
 }
 
