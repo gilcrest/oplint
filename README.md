@@ -86,7 +86,7 @@ Click on the diagnostic from `oplint` to be taken directly to the spot of the va
 
 ### oplint -missing flag
 
-Optionally, oplint can report diagnostics on any functions that return an error, but do not have an op constant defined.
+Optionally, `oplint` can also report functions that return an error, but do not have a constant named `op` defined.
 
 ```sh
 $ cat foo.go
