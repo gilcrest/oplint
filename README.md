@@ -57,7 +57,7 @@ then the format should be:
 
 Adding the `op` to errors adds context which can be critical to understanding your errors, particularly when wrapping errors and sending through a long chain of function calls.
 
-## Linter
+## oplint command
 
 The `oplint` command will scan the body of every function (including those with function receivers) in a given file or directory/package. If a constant is defined as either `op` or `Op`, it will check to see if the value given for said constant matches the function name which envelops it. If the value does not match, `oplint` will report the mismatch and the position.
 
@@ -83,6 +83,29 @@ $ oplint foo.go
 ```
 
 Click on the diagnostic from `oplint` to be taken directly to the spot of the value mismatch and correct it using the diagnostic message.
+
+### oplint -missing flag
+
+Optionally, oplint can report diagnostics on any functions that return an error, but do not have an op constant defined.
+
+```sh
+$ cat foo.go
+package testdata
+
+import (
+    "errors"
+    "fmt"
+)
+
+func hello() error {
+    return errors.New("some error message")
+}
+
+$ oplint -missing foo.go
+/Users/gilcrest/opdemo/foo.go:8:1: testdata/hello returns an error but does not define an op constant
+```
+
+> The default value is false for the `-missing` flag. If it is not present, these checks will not be run.
 
 ## Acknowledgements
 
